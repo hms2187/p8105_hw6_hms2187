@@ -36,7 +36,8 @@ homicide_df =
       disposition == "Open/No arrest" ~ 0,
       disposition == "Closed by arrest" ~ 1)
     ) %>% 
-  filter(city_state != "Tulsa, AL") %>% 
+  filter(victim_race %in% c("White", "Black"),
+         city_state != "Tulsa, AL") %>% 
   select(city_state, resolution, victim_age, victim_race, victim_sex)
 
 ```
@@ -47,6 +48,72 @@ baltimore_df =
   homicide_df %>% 
   filter(city_state == "Baltimore, MD")
 
-glm(resolution ~ victim_age + victim_race + victim_sex, data = baltimore_df, family = binomial())
+glm(resolution ~ victim_age + victim_race + victim_sex, data = baltimore_df, family = binomial()) %>% 
+  broom::tidy() %>% 
+  mutate(
+    OR = exp(estimate),
+    CI_lower = exp(estimate - 1.96*std.error),
+    CI_upper = exp(estimate + 1.96*std.error)
+  ) %>% 
+  select(term, OR, starts_with("CI")) %>% 
+  knitr::kable(digits = 3)
+```
+Now we will nest to get df for each city and then map across each city, then tidy results to produce new dataframe with desired outcomes.
+
+```{r}
+model_results_df =
+homicide_df %>% 
+  nest(data = -city_state) %>% 
+  mutate(
+    models = map(.x = data, ~glm(resolution ~ victim_age + victim_race + victim_sex, data = .x, family = binomial())),
+    results = map(models, broom::tidy)
+  ) %>% 
+  select(city_state, results) %>% 
+  unnest(results) %>% 
+  mutate(
+    OR = exp(estimate),
+    CI_lower = exp(estimate - 1.96*std.error),
+    CI_upper = exp(estimate + 1.96*std.error)
+  ) %>% 
+  select(term, OR, starts_with("CI"))
 ```
 
+in each city, are arrests resolved differently by sex of victim?
+```{r}
+model_results_df %>% 
+  filter(term == "victim_sexMale") %>% 
+  mutate(city_state = fct_reorder(city_state, OR)) %>% 
+  ggplot(aes(x = city_state, y = OR)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+## Problem 2
+need to do extra data cleaning (make categorical vars into categorical, they will read in as numeric)
+make 3 models and compare using cross-validation
+2 are given but need to create the 3rd on our own
+use the cross validation lecture and apply code to here by changing models and outputs
+may need to take time just looking at full dataset and thinking about model building
+
+after making the linear model...
+```{r}
+baby_df %>% 
+  modelr::add_residuals(model_fit) %>% 
+  ggplot(aes(x = resid)) +
+  geom_density()
+```
+looking for normal distribution
+```{r}
+baby_df %>% 
+  modelr::add_residuals(model_fit) %>% 
+  ggplot(aes(x = gaweeks, y = resid)) +
+  geom_point()
+```
+looking to see even spread across levels of x/ is it skewed? Outliers?
+
+## Problem 3
+central park weather df, using bootstrap to obtain parameter distributions. fit linear model and get r^2 and log of product of b0 and b1, those are the two quantities we will bootstrap
+R^2 will come out of broom::glance, the second thing comes from broom::tidy coefficients, rearrange to be next to each other, multiply, log....
+do it with one model fit and then bootstrap (?)
+group_by and summarize for confidence intervals on each parameter
