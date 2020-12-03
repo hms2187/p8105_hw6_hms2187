@@ -8,6 +8,7 @@ output: github_document
 library(tidyverse)
 library(p8105.datasets)
 library(readxl)
+library(modelr)
 knitr::opts_chunk$set(
   fig.width = 6,
   fig.asp = .6,
@@ -88,29 +89,106 @@ model_results_df %>%
   geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper)) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
+The plot seems to show a pretty wide variation in ORs. The lowest OR is in New York, the highest OR is in Albuquerque.
 
 ## Problem 2
-need to do extra data cleaning (make categorical vars into categorical, they will read in as numeric)
-make 3 models and compare using cross-validation
-2 are given but need to create the 3rd on our own
-use the cross validation lecture and apply code to here by changing models and outputs
-may need to take time just looking at full dataset and thinking about model building
 
-after making the linear model...
+Loading in and cleaning data
 ```{r}
-baby_df %>% 
-  modelr::add_residuals(model_fit) %>% 
-  ggplot(aes(x = resid)) +
+bw_df =
+  read.csv("./data/birthweight.csv") %>% 
+  mutate(
+    babysex = as.factor(babysex),
+    frace = as.factor(frace),
+    malform = as.factor(malform),
+    mrace = as.factor(mrace)
+  )
+summary(bw_df)
+any(is.na(bw_df))
+```
+Categorical vars have been turned into factors from numeric. There appears to be no missing data.
+
+To create a model, I googled things that predict birthweight and found a webpage on Webmd that referenced a study by Duke researchers. Their model included fetal sex, stage of pregnancy, mother's height and weight, weight gain during pregnancy, and number of other children. Though their variables were slightly different, we have variables that are close enough to mimic such a model.
+Here is the model for birthweight:
+```{r}
+model_1 =
+  lm(bwt ~ babysex + gaweeks + mheight + delwt + wtgain + parity, bw_df)
+broom::glance(model_1)
+broom::tidy(model_1) %>% knitr::kable(digits = 3)
+
+plot_distrib =
+  bw_df %>% 
+  add_residuals(model_1) %>% 
+  ggplot(aes(x=resid)) +
   geom_density()
-```
-looking for normal distribution
-```{r}
-baby_df %>% 
-  modelr::add_residuals(model_fit) %>% 
-  ggplot(aes(x = gaweeks, y = resid)) +
+plot_distrib
+
+plot_1 =
+  bw_df %>% 
+  add_predictions(model_1) %>% 
+  add_residuals(model_1) %>% 
+  ggplot(aes(x = pred, y = resid)) +
   geom_point()
+plot_1
 ```
-looking to see even spread across levels of x/ is it skewed? Outliers?
+
+Residuals look normally distributed. Plotting residuals against predictions looks pretty good and there are no obvious outliers.
+
+Now making two additional models, plus looking at their summaries.
+```{r}
+model_2 =
+  lm(bwt ~ blength + gaweeks, bw_df)
+broom::tidy(model_2) %>% knitr::kable(digits = 3)
+
+model_3 =
+  lm(bwt ~ blength*bhead*babysex, bw_df)
+broom::tidy(model_3) %>% knitr::kable(digits = 3)
+```
+
+Trying to understand model fit using CV. 
+
+```{r}
+cv_df = 
+  crossv_mc(bw_df, 100) %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  )
+```
+
+See if I can fit the models to the splits ...
+
+```{r}
+cv_df = 
+  cv_df %>% 
+  mutate(
+    model_1 = map(.x = train, ~lm(bwt ~ babysex + gaweeks + mheight + delwt + wtgain + parity, data = .x)),
+    model_2 = map(.x = train, ~ lm(bwt ~ blength + gaweeks, data = .x)),
+    model_3 = map(.x = train, ~lm(bwt ~ blength*bhead*babysex, data = .x))
+  ) %>% 
+  mutate(
+    rmse_1 = map2_dbl(.x = model_1, .y = test, ~rmse(model = .x, data = .y)),
+    rmse_2 = map2_dbl(.x = model_2, .y = test, ~rmse(model = .x, data = .y)),
+    rmse_3 = map2_dbl(.x = model_3, .y = test, ~rmse(model = .x, data = .y))
+  )
+```
+
+Violin plot of RMSEs
+
+```{r}
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_"
+  ) %>% 
+  ggplot(aes(x = model, y = rmse)) +
+  geom_violin()
+```
+
+Looks like model 3 is the winner, with a lower RMSE than 2 and well lower than model 1 (sorry Duke researchers/WebMD).
 
 ## Problem 3
 central park weather df, using bootstrap to obtain parameter distributions. fit linear model and get r^2 and log of product of b0 and b1, those are the two quantities we will bootstrap
