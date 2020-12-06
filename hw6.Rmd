@@ -206,8 +206,70 @@ weather_df =
   select(name, id, everything())
 ```
 
+Now running bootstraps to make two different samples. One (called r2) collects r^2 values for each bootstrap, then makes a density plot of the estimates, then creates a table that shows the 95% CI.
+The second sample (called beta) does the same thing but for the beta 0 and beta 1 values. It then manipulates those values (multiplies them together and takes the log of the product), plots the distribution of the manipulated estimate, and creates a 95% CI.
+```{r}
+weather_model =
+  lm(tmax ~ tmin, data = weather_df)
 
-central park weather df, using bootstrap to obtain parameter distributions. fit linear model and get r^2 and log of product of b0 and b1, those are the two quantities we will bootstrap
-R^2 will come out of broom::glance, the second thing comes from broom::tidy coefficients, rearrange to be next to each other, multiply, log....
-do it with one model fit and then bootstrap (?)
-group_by and summarize for confidence intervals on each parameter
+r2 =
+weather_df %>% 
+  bootstrap(5000, id = "strap_number") %>% 
+  mutate(
+    models = map(.x = strap, ~lm(tmax ~ tmin, data = .x)), 
+    results1 = map(models, broom::glance)
+  ) %>% 
+  select(strap_number, results1) %>% 
+  unnest(results1) %>% 
+  select(r.squared) 
+
+r2_plot =
+  r2 %>% 
+  ggplot(aes(x=r.squared)) +
+  geom_density()
+r2_plot
+
+r2_ci =
+  r2 %>% 
+  summarize(
+    ci_lower = quantile(r.squared, 0.025),
+    ci_upper = quantile(r.squared, 0.975)
+  ) %>% 
+  knitr::kable(digits = 3)
+r2_ci
+```
+The density plot shows mostly normal distribution of r^2 values, centering around 0.91. The confidence limits range from around 0.90 to 0.93, indicating strong, positive correlation between tmax and tmin. This makes sense, given that I would expect a hot day with high tmax to also have a high tmin, and same vice versa for cold days.
+
+```{r}
+beta =
+weather_df %>% 
+  bootstrap(5000, id = "strap_number") %>% 
+  mutate(
+    models = map(.x = strap, ~lm(tmax ~ tmin, data = .x)), 
+    results1 = map(models, broom::tidy)
+  ) %>% 
+  select(strap_number, results1) %>% 
+  unnest(results1) %>% 
+  select(strap_number, term, estimate) %>% 
+  pivot_wider(names_from = term, values_from = estimate) %>% 
+  group_by(strap_number) %>% 
+  summarize(
+    new_estimate = log(`(Intercept)`*tmin)
+  )
+
+beta_plot =
+  beta %>% 
+  ggplot(aes(x=new_estimate)) +
+  geom_density()
+beta_plot
+
+beta_ci =
+  beta %>% 
+  summarize(
+    ci_lower = quantile(new_estimate, 0.025),
+    ci_upper = quantile(new_estimate, 0.975)
+  ) %>% 
+  knitr::kable(digits = 3)
+beta_ci
+```
+The density plot for the "new estimate" (which is equal to the log of the product of b0 and b1) appears normal and centered at 2.02. The CI for this estimate ranges from 1.97 to 2.06.
